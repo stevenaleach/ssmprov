@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Hard-coded path to tools.py
+TOOLS_PY="$HOME/src/ssmprov/tools.py"
+
+# Choose Python: prefer project venv, else active VIRTUAL_ENV, else system python3
+if [[ -x "$HOME/src/ssmprov/.venv/bin/python" ]]; then
+  PY="$HOME/src/ssmprov/.venv/bin/python"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+  PY="$VIRTUAL_ENV/bin/python"
+else
+  PY="$(command -v python3)"
+fi
+
+# Always run inside /_ if it exists, else stay here
+if [[ -d "/_" ]]; then
+  cd "/_"
+fi
+
+exec "$PY" "$TOOLS_PY" RUN "$@"
+

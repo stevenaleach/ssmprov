@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+TARGET="$HOME/src/ssmprov/RWKV7.py"
+WORKDIR="/_/.checkpoints/rwkv7-7b2-Q8_0_20250722"
+
+# Prefer active venv’s python, else fall back to PATH
+if [[ -n "${VIRTUAL_ENV:-}" ]] && [[ -x "$VIRTUAL_ENV/bin/python3" ]]; then
+  PY="$VIRTUAL_ENV/bin/python3"
+else
+  PY="$(command -v python3)"
+fi
+
+# Use env -C if available, else portable subshell
+if env -C / tmp true >/dev/null 2>&1; then
+  exec env -C "$WORKDIR" "$PY" "$TARGET" "$@"
+else
+  ( cd "$WORKDIR" && exec "$PY" "$TARGET" "$@" )
+fi

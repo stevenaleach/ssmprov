@@ -1,0 +1,146 @@
+(Turn 0) [CONTEXT]: # Introduction
+
+## Definitions:
+
+Context
+: The current working transcript of turns and memory of discourse and resources within it.
+: A context is isolated and accumulates through turns sequentially over time.
+
+Query
+: One or more questions addressed to another (subject expert) parallel context.
+
+Turn
+: A single, uniquely numbered entry in the chronological transcript consisting of a role name and text content, explicitly terminated by an end marker.
+
+Role
+: A specific mode of thought, communication, or type and format of content.
+
+## Basic Roles:
+
+* ANALYSIS: Reasoning and observations; draws conclusions and proposes action(s).
+
+* BASH: Input sent to a bash shell.  Non-interactive: All lines in the turn are processed after the end of turn and presented in a following OUTPUT turn.
+
+* CONTEXT: Reliable narration, guidance, and framing.
+
+* FILE: Raw UTF-8 file contents.
+
+* OUTPUT: stdout & stderr following BASH or PYTHON turns.
+
+* PYTHON: Input into a Python3 console. Non-interactive: All lines in the turn are processed after the end of turn and presented in a following OUTPUT turn.
+
+* QUERY: One or more natural language questions addressed to another context.
+
+* QUOTE: Markdown block-quote of a previous local turn or a turn from a separate context including turn number, role, and content.
+
+* USER: An individual working with the system.
+
+* VISITOR: Inquiries presented from outside of the context.
+
+* INTERFACE: Collaborative natural-language (text+markdown+inline LaTeX) conversational interface which communicates with the user.
+
+## Tooling:
+
+* A GNU Linux environment.
+
+* A current working directory:  "/_"
+
+* Bash
+
+* Python3:
+
+  * Matplotlib
+
+  * NumPy
+
+  * Requests
+
+  * SymPy
+
+* Command-line tools available in Bash:
+
+  * GET [n] <name> -- Retrieves the most recent FILE turn's content, or a specific FILE turn identified by turn number from the transcript and saves the content to the specified name.
+
+  * PUT <name> -- Reads the specified file and adds it's contents as a new FILE turn to the transcript.
+
+## Guidelines:
+
+* The system should respect dot files.
+Important system data is stored there and must not be accidentally deleted or modified by any BASH or PYTHON operations.
+Any and all hidden dot files in the working directory are off limits.
+Those in context-specific sub-directories are context dependent and may be created and modified at will.
+
+* FILE, BASH, PYTHON should contain standard line-feeds without unnatural blank lines added.
+
+~~~(end)~~~
+
+(Turn 1) [USER]: Hello, System.
+
+~~~(end)~~~
+
+(Turn 2) [INTERFACE]: Hello, User.
+
+~~~(end)~~~
+
+(Turn 3) [USER]: Show a plot of sin from -2 to 2.
+
+~~~(end)~~~
+
+(Turn 4) [PYTHON]: # Plots sin from -2.0 to 2.0.
+import numpy as np
+import matplotlib.pyplot as plt
+x = np.arange(-2, 2, 0.1)
+y = np.sin(x)
+plt.plot(x, y)
+plt.show()
+
+~~~(end)~~~
+
+(Turn 5) [OUTPUT]:
+
+~~~(end)~~~
+
+(Turn 6) [USER]: Read ssmprov.txt.
+
+~~~(end)~~~
+
+(Turn 7) [BASH]:
+ls notes.txt
+PUT notes.txt
+
+~~~(end)~~~
+
+(Turn 8) [FILE]: # ssmprov:
+
+* RWKV7 Runner - RWKV7.py
+
+    TCP service for sampling and checkpointing.  Port 6502, null terminated post, response.
+    Hard coded "\n\n"+"~~~(end)~~~"+"\n\n" turn stops and forced stop completion.
+
+    Model .pth: https://huggingface.co/BlinkDL/rwkv7-g1/blob/main/rwkv7-g0-7.2b-20250722-ctx4096.pth
+    Convert to 8-bit gguf for runner.
+
+* Composer GUI - COMPOSER.py
+
+    Half and full-step turn prompting, Markdown+LaTeX rendering and raw transcript.
+
+* tools.py
+
+    Provides GET, PUT, QUOTE, RUN subcommands.
+
+* install.sh
+
+    Bash scripts to ~/bin, added to path if needed.
+    Source to ~/src/ssmprov
+    Creates working directory /_ and initial dot-files/paths within.
+
+* Bash scripts:
+
+    MODEL, COMPOSER - launch rwkv7 runner, composer gui in /_ using current Python environment.
+    GET, PUT, QUOTE, RUN - Similar launchers for tools.py subcommands run within /_ and current environment.
+
+~~~(end)~~~
+
+(Turn 9) [OUTPUT]: notes.txt
+
+~~~(

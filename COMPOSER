@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+TARGET="$HOME/src/ssmprov/COMPOSER.py"
+WORKDIR="/_"
+
+if [[ -n "${VIRTUAL_ENV:-}" ]] && [[ -x "$VIRTUAL_ENV/bin/python3" ]]; then
+  PY="$VIRTUAL_ENV/bin/python3"
+else
+  PY="$(command -v python3)"
+fi
+
+if env -C / tmp true >/dev/null 2>&1; then
+  exec env -C "$WORKDIR" "$PY" "$TARGET" "$@"
+else
+  ( cd "$WORKDIR" && exec "$PY" "$TARGET" "$@" )
+fi

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+TOOLS_PY="$HOME/src/ssmprov/tools.py"
+
+if [[ -x "$HOME/src/ssmprov/.venv/bin/python" ]]; then
+  PY="$HOME/src/ssmprov/.venv/bin/python"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+  PY="$VIRTUAL_ENV/bin/python"
+else
+  PY="$(command -v python3)"
+fi
+
+[[ -d "/_" ]] && cd "/_"
+
+exec "$PY" "$TOOLS_PY" GET "$@"
+
