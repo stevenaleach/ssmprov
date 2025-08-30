@@ -105,8 +105,8 @@ plt.show()
 ~~~(end)~~~
 
 (Turn 7) [BASH]:
-ls notes.txt
-PUT notes.txt
+ls ssmprov.txt
+PUT ssmprov.txt
 
 ~~~(end)~~~
 
@@ -141,6 +141,6 @@ PUT notes.txt
 
 ~~~(end)~~~
 
-(Turn 9) [OUTPUT]: notes.txt
+(Turn 9) [OUTPUT]: ssmprov.txt
 
 ~~~(
