@@ -73,3 +73,9 @@ and simply finish the end marker to complete it.  With a full divider and specif
 the model will (hopefully) generate role output and cleanly terminate with a full end marker on
 completion.
 
+# Primer:
+
+primer.txt is the current primer I've been pasting in for cold-start testing. Gives the general idea
+with the script/transcript form I've been playing with -- only the \n\n~~~(end)~~~\n\n stop markers
+are hard-coded in the runner, all else can be rewritten with whatever typography and role names you'd
+like to try.
