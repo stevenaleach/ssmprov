@@ -140,7 +140,7 @@ Example: `!live settings live` gives a live session auto-saving after each promp
 
 The `NAME` script can be copied into `/bin` or elsewhere on PATH with the **same name** as any checkpoint.  
 
-It automatically sets `--bang '!name settings name'`, so:  
+It automatically sets `--bang '!NAME settings NAME'`, so:  
 
 ```bash
 echo "Hello" | NAME
