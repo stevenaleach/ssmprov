@@ -49,7 +49,7 @@ FALCON_INSTRUCT &
 echo "/save blank" | PIPE
 
 # 7. Prime model with all source files & transcript (no roles, raw input)
-cat primer_cli.txt | PIPE
+cat primer_cli.txt | PIPE --counter 12
 # The model will automatically close the final turn with ')~~~'
 
 # 7.5 Try the RUN command now, and the last BASH block in the new .transcript.txt
