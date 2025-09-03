@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# self-named chat wrapper around PIPE
+# Usage:
+#   echo "Hello" | NAME --in USER --out INTERFACE
+# This script uses its own name ("NAME") for save/load in the bang line.
+
+set -Eeuo pipefail
+
+# derive our own name from the filename used to invoke the script
+name="$(basename -- "$0")"
+
+# optional: edit here if you want a different settings name
+settings="settings"
+
+# build the bang line with our name as first and last arg
+bang="!${name} ${settings} ${name}"
+
+# run PIPE with the bang line prepended, passing all arguments and stdin
+exec PIPE --bang "$bang" "$@"
