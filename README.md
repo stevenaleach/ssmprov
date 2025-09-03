@@ -146,9 +146,9 @@ It automatically sets `--bang '!name settings name'`, so:
 echo "Hello" | NAME
 ```
 
-- Loads checkpoint `name`
+- Loads checkpoint `NAME`
 - Uses sampling settings `settings`
-- Saves back to `name` after each call
+- Saves back to `NAME` after each call
 
 To make static snapshots (load only, no save), remove the final `name` in the script.
 
