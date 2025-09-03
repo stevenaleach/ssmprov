@@ -1,0 +1,1326 @@
+(Turn 0) [CONTEXT]: # "ssmprov" (SSM Improv) - Introduction
+
+## State Space Models:
+
+State Space Models (SSMs) are attention-free sequence models that process text one token at a time, keeping only a small recurrent state instead of a full attention window.
+This state can be saved, loaded, or resumed later, so long contexts can be handled by checkpoints rather than re-feeding the entire history.
+Modern “post-transformer” models like Mamba and RWKV use State Space Models (SSMs) instead of self-attenti
+Rather than storing the whole sequence in memory, they update a compact recurrent state as they read each token.
+This state summarizes everything seen so far, so it can be serialized, restored, or forked for new prompts without replaying previous text.
+Because computation scales linearly with sequence length, SSMs handle very long contexts efficiently and support features like /save and /load in chat loops.
+SSMs replace quadratic self-attention with a learned dynamical system that evolves a hidden state as tokens arrive.
+At each step, the model reads one token, updates the state, and produces output logits.
+The state is O(1) per layer, so it’s cheap to store and reload.
+Features like checkpointing, resumable contexts, and branching “mind states” come from this small recurrent memory, making SSMs ideal for long conversations or incremental code generation.
+
+## Project Principles & Premise:
+
+"ssmprov" is a diegetic, transcript-driven workbench for state-space models.
+
+The system has been tested with RWKV7, as well as Falcon3-Mamba base and instruct.
+If a runner were written for it, XLSTM 7B might also be used.
+This system is model agnostic.
+It is built around a single always-on runner serving up a given model to which text "prompts" may be sent to either the current context or to a a context switched to from a saved snapshot.
+
+The goal of the project is to use a transcript of sequential turns of action and communication in a set of named and defined roles (such as this text) to enable turn-based collaboration with a local SSM able to generate turn output in specific roles given contextual grounding.
+Primed and experienced contexts may be saved to checkpoints and forked into specialist roles or as content experts able to be loaded and resumed again and again.
+
+## Definitions:
+
+Context
+: The current working transcript of turns and memory of discourse and resources within it.
+: A context is isolated and accumulates through turns sequentially over time.
+
+Turn
+: A single, uniquely numbered entry in the chronological transcript consisting of a role name and text content, explicitly terminated by an end marker.
+
+Role
+: A specific mode of thought, communication, or type and format of content.
+
+## Basic Roles:
+
+* ANALYSIS: Reasoning and observations; draws conclusions and proposes action(s).
+
+* BASH: Input sent to a bash shell.  Non-interactive: All lines in the turn are processed after the end of turn and presented in a following OUTPUT turn.
+
+* CONTEXT: Reliable narration, guidance, and framing.
+
+* FILE: Raw UTF-8 file contents.
+
+* OUTPUT: stdout & stderr following BASH or PYTHON turns.
+
+* PYTHON: Input into a Python3 console. Non-interactive: All lines in the turn are processed after the end of turn and presented in a following OUTPUT turn.
+
+* QUOTE: Markdown block-quote of a previous local turn or a turn from a separate context including turn number, role, and content.
+
+* USER: An individual working with the system.
+
+* INTERFACE: Collaborative natural-language (text+markdown+inline LaTeX) conversational interface which communicates with the user.
+
+## Tooling:
+
+* A GNU Linux environment.
+
+* A current working directory:  "/_"
+
+* Bash
+
+* Python3:
+
+  * Matplotlib
+
+  * NumPy
+
+  * Requests
+
+  * SymPy
+
+* Command-line tools available in Bash:
+
+  * GET [n] <name> -- Retrieves the most recent FILE turn's content, or a specific FILE turn identified by turn number from the transcript and saves the content to the specified name.
+
+  * PUT <name> -- Reads the specified file and adds it's contents as a new FILE turn to the transcript.
+
+  * RUN [n] -- Executes specified or most recent PYTHON or BASH turn, producing a new OUTPUT turn with stdout+stderr from execution.
+
+  * QUOTE <n> -- Adds a QUOTE turn with Markdown block quoting ("> " prefix for each line) of a specified turn from the transcript.
+
+## Guidelines:
+
+* The system should respect dot files.
+Important system data is stored there and must not be accidentally deleted or modified by any BASH or PYTHON operations.
+Any and all hidden dot files in the working directory are off limits.
+Those in context-specific sub-directories are context dependent and may be created and modified at will.
+
+* FILE, BASH, PYTHON should contain standard line-feeds without unnatural blank lines added.
+
+~~~(end)~~~
+
+(Turn 1) [FILE]: # /_/src/pipe.py
+# Scriptable CLI pipe for SSM runner service with turn templating.
+
+import argparse
+import socket
+import sys
+from pathlib import Path
+from typing import Optional
+
+HOST = "127.0.0.1"
+DEFAULT_PORT = 6502
+NULL = b"\x00"
+
+def read_all_stdin() -> str:
+    # Read raw stdin as text; we trim only the final single LF if present.
+    s = sys.stdin.read()
+    if s.endswith("\n"):
+        s = s[:-1]
+    return s
+
+def ensure_counter_file() -> None:
+    p = Path(".counter")
+    if not p.exists():
+        p.write_text("0", encoding="utf-8")
+
+def read_counter() -> int:
+    ensure_counter_file()
+    txt = Path(".counter").read_text(encoding="utf-8").strip()
+    try:
+        return int(txt or "0")
+    except ValueError:
+        return 0
+
+def write_counter(n: int) -> None:
+    Path(".counter").write_text(str(n), encoding="utf-8")
+
+def send_roundtrip_bytes(payload_text: str, port: int, connect_timeout: float, recv_timeout: Optional[float]) -> bytes:
+    """
+    Send UTF-8 encoded text terminated by NULL; return raw bytes up to (but not including) NULL.
+    No decoding here—callers decide how/if to decode. This preserves exact newlines.
+    """
+    to_send = payload_text.encode("utf-8") + NULL
+    with socket.create_connection((HOST, port), timeout=connect_timeout) as s:
+        s.settimeout(recv_timeout)
+        s.sendall(to_send)
+        buf = bytearray()
+        while True:
+            part = s.recv(4096)
+            if not part:
+                raise ConnectionError("connection closed before NULL terminator")
+            i = part.find(NULL)
+            if i != -1:
+                buf.extend(part[:i])
+                break
+            buf.extend(part)
+    return bytes(buf)
+
+def build_prompt_body(raw: str, in_role: Optional[str], out_role: Optional[str]) -> tuple[str, Optional[int], Optional[int]]:
+    """
+    Build the body to send for prompt modes (non-slash).
+    Returns (body_text, minted_in, minted_out).
+    - If --in and --out:  (Turn N)[IN]: <raw>  + full fence  + (Turn M)[OUT]:
+    - If --in only:       (Turn N)[IN]: <raw>  + half divider
+    - If no roles:        <raw>
+    """
+    if not in_role and not out_role:
+        return (raw, None, None)
+    if out_role and not in_role:
+        raise ValueError("--out requires --in")
+
+    current = read_counter()
+    minted_in = current + 1
+    in_hdr = f"(Turn {minted_in}) [{in_role}]: "
+
+    if out_role:
+        minted_out = minted_in + 1
+        out_hdr = f"(Turn {minted_out}) [{out_role}]: "
+        # Full fence BETWEEN IN body and OUT header.
+        body = in_hdr + raw + "\n\n~~~(end)~~~\n\n" + out_hdr
+        return (body, minted_in, minted_out)
+
+    # IN-only: add half divider at end
+    body = in_hdr + raw + "\n\n~~~("
+    return (body, minted_in, None)
+
+def append_transcript_binary(chunks_text_first: list[str], reply_bytes: bytes, debang_prefix_len: int = 0) -> None:
+    """
+    Append exactly what was sent (as UTF-8 text) and exactly what was received (bytes) to .transcript.txt.
+    If debang is active, strip the first prefix_len bytes (characters) from the first chunk after encoding.
+    """
+    with open(".transcript.txt", "ab") as f:
+        for idx, c in enumerate(chunks_text_first):
+            b = c.encode("utf-8")
+            if idx == 0 and debang_prefix_len > 0:
+                b = b[debang_prefix_len:]
+            f.write(b)
+        f.write(reply_bytes)
+
+def main():
+    ap = argparse.ArgumentParser(description="PIPE: pipe/paste text to SSM runner with optional transcript templating.")
+    ap.add_argument("--in", dest="in_role", help="Input role name (e.g., USER)")
+    ap.add_argument("--out", dest="out_role", help="Output role name (e.g., INTERFACE)")
+    ap.add_argument("--bang", dest="bang", help="Raw prefix line(s) prepended as-is before the prompt")
+    ap.add_argument("--counter", dest="counter_override", type=int, help="Explicitly set .counter to this value on success")
+    ap.add_argument("--port", dest="port", type=int, default=DEFAULT_PORT, help=f"Runner TCP port (default {DEFAULT_PORT})")
+    ap.add_argument("--connect-timeout", type=float, default=3.0, help="TCP connect timeout (seconds)")
+    ap.add_argument("--recv-timeout", type=float, default=600.0, help="Receive timeout (seconds)")
+    ap.add_argument("--debang", action="store_true",
+                    help="Strip the leading prefix line(s) from transcript (wire text unchanged)")
+
+    args = ap.parse_args()
+    text_in = read_all_stdin()
+    if text_in == "":
+        sys.exit(0)
+
+    is_slash = text_in.startswith("/")
+    prefix = (args.bang + "\n") if args.bang else ""
+
+    minted_in = minted_out = None
+    if is_slash:
+        send_text = prefix + text_in
+    else:
+        try:
+            body, minted_in, minted_out = build_prompt_body(text_in, args.in_role, args.out_role)
+        except ValueError as ve:
+            sys.stderr.write(f"[ERROR] {ve}\n")
+            sys.exit(2)
+        send_text = prefix + body
+
+    try:
+        reply_bytes = send_roundtrip_bytes(send_text, args.port, args.connect_timeout, args.recv_timeout)
+    except Exception as e:
+        sys.stderr.write(f"[ERROR] {e}\n")
+        sys.exit(1)
+
+    # Emit reply to stdout exactly
+    try:
+        sys.stdout.buffer.write(reply_bytes)
+        sys.stdout.buffer.flush()
+    except Exception:
+        pass
+
+    if is_slash:
+        if args.counter_override is not None:
+            write_counter(args.counter_override)
+        return
+
+    # Figure transcript-sent chunk (optionally sans prefix)
+    debang_prefix_len = 0
+    transcript_sent = send_text
+    if args.debang and prefix:
+        nl = send_text.find("\n")
+        if nl != -1:
+            debang_prefix_len = nl + 1  # number of characters to drop from encoded bytes
+        else:
+            transcript_sent = ""  # nothing after prefix
+
+    # Append exactly what was sent (UTF-8) + exactly what was received (bytes)
+    append_transcript_binary([transcript_sent], reply_bytes, debang_prefix_len=debang_prefix_len)
+
+    # Counter update rules
+    if args.counter_override is not None:
+        write_counter(args.counter_override)
+    else:
+        if minted_out is not None:
+            write_counter(minted_out)
+        elif minted_in is not None:
+            write_counter(minted_in)
+
+if __name__ == "__main__":
+    main()
+
+
+~~~(end)~~~
+
+(Turn 2) [FILE]: # /_/src/Falcon_Mamba_Instruct.py
+#
+# "ssmprov" Model Runner.
+#
+# Model: Falcon3-Mamba-7B-Instruct (GGUF, Q8_0)
+#
+# Protocol & commands identical to your RWKV TCP runner:
+#   - plain text → generate
+#   - /save, /load, /save_set, /load_set, /t, /p, /k, /pen_freq, /pen_pres, /pen_rep, /min_p, /?
+#   - optional leading "!" header: "!checkpoint set next_checkpoint\n<your prompt>"
+#
+# It re-execs itself with LD_LIBRARY_PATH so llama_cpp hits your local ~/src/llama.cpp build.
+
+import os, sys, pickle, ctypes, json, socket
+
+# ---- paths / build env -------------------------------------------------------
+local_build = True  # use llama.cpp in ~/src/llama.cpp/build/bin
+BUILD = os.path.expanduser("~/src/llama.cpp/build/bin")    # libllama.so & friends
+CUDA_STUBS = "/usr/lib/x86_64-linux-gnu"                   # driver libs (Ubuntu)
+MODEL = os.path.expanduser("~/models/falcon_mamba/Falcon3-Mamba-7B-Instruct-q8_0.gguf")
+
+if local_build:
+    # Re-exec with env so llama_cpp loads local CUDA libllama.so (and your GPU kernels)
+    if "LL_REEXEC" not in os.environ:
+        env = {
+            "LL_REEXEC": "1",
+            "HOME": os.path.expanduser("~"),
+            "PATH": "/usr/bin",
+            "LD_LIBRARY_PATH": f"{BUILD}:{CUDA_STUBS}",
+            "LLAMA_CPP_LIB": os.path.join(BUILD, "libllama.so"),
+        }
+        os.execve(sys.executable, [sys.executable, *sys.argv], env)
+
+# ---- llama.cpp driver --------------------------------------------------------
+from llama_cpp import Llama
+
+# defaults (kept close to your RWKV runner; Mamba tip: min_p ~= 0.05–0.10 often helps)
+MAX_CHARS = 16*1024
+TEMP      = 0.18
+TOP_P     = 0.88
+TOP_K     = 0
+PEN_FREQ  = 0.00
+PEN_PRES  = 0.00
+PEN_REP   = 1.00
+MIN_P     = 0.12 
+
+# stop-marker helpers (same behavior as RWKV runner)
+mark1 = "\n~~~("
+mark2 = ")~~~\n\n"
+mark3 = "end)~~"
+FORCE_AFTER  = "end)~~~\n\n"
+FORCE_AFTER3 = "~\n\n"
+
+def make_llm() -> Llama:
+    return Llama(
+        model_path=MODEL,
+        n_ctx=64*1024,     # suppress warning; real context governed by model/kv
+        n_gpu_layers=999,  # full offload if possible
+        n_threads=8,
+        verbose=False,
+    )
+
+# ---- low-level ctx access (unchanged) ---------------------------------------
+def _ctx_ptr(llm: Llama):
+    _ctx = getattr(llm, "_ctx", None)
+    return getattr(_ctx, "ctx", None) or _ctx
+
+def capture_state_min(llm: Llama) -> dict:
+    """Return minimal state: {'blob': bytes, 'n_tokens': int}."""
+    ntok = int(getattr(llm, "n_tokens", 0))
+    try:
+        blob = llm.save_state()
+        if isinstance(blob, (bytes, bytearray, memoryview)):
+            return {"blob": bytes(blob), "n_tokens": ntok}
+    except Exception:
+        pass
+    from llama_cpp import llama_cpp as C
+    ctx = _ctx_ptr(llm)
+    if ctx is None:
+        raise RuntimeError("Unable to access llama context pointer for state copy.")
+    size = int(C.llama_get_state_size(ctx))
+    buf = (ctypes.c_uint8 * size)()
+    wrote = int(C.llama_copy_state_data(ctx, buf))
+    return {"blob": bytes(buf[:wrote]), "n_tokens": ntok}
+
+def apply_state_min(llm: Llama, st: dict):
+    """Apply minimal state produced by capture_state_min."""
+    blob = st["blob"]
+    llm.reset()
+    try:
+        llm.load_state(blob)
+    except Exception:
+        from llama_cpp import llama_cpp as C
+        ctx = _ctx_ptr(llm)
+        if ctx is None:
+            raise RuntimeError("Unable to access llama context pointer for state set.")
+        Arr = ctypes.c_uint8 * len(blob)
+        if int(C.llama_set_state_data(ctx, Arr.from_buffer_copy(blob))) != len(blob):
+            raise RuntimeError("llama_set_state_data wrote fewer bytes than expected")
+    llm.n_tokens = int(st.get("n_tokens", 0))
+
+# ---- persistence of state & sampling knobs ----------------------------------
+def save_state_min(state_obj: dict, path="kv.pkl") -> int:
+    if not state_obj:
+        raise RuntimeError("No state to save yet. Say something first.")
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        pickle.dump({"blob": state_obj["blob"], "n_tokens": int(state_obj.get("n_tokens", 0))}, f, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(tmp, path)
+    return os.path.getsize(path)
+
+def load_state_min(llm: Llama, path="kv.pkl") -> dict:
+    with open(path, "rb") as f:
+        st = pickle.load(f)
+    apply_state_min(llm, st)
+    return st
+
+def save_knob_set(path: str, *, temp, top_p, top_k, pen_freq, pen_pres, pen_rep, min_p) -> int:
+    data = {
+        "temp": float(temp), "top_p": float(top_p), "top_k": int(top_k),
+        "pen_freq": float(pen_freq), "pen_pres": float(pen_pres), "pen_rep": float(pen_rep),
+        "min_p": float(min_p),
+    }
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, separators=(",", ":"))
+    os.replace(tmp, path)
+    return os.path.getsize(path)
+
+def load_knob_set(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as f:
+        d = json.load(f)
+    return {
+        "temp": float(d.get("temp", TEMP)),
+        "top_p": float(d.get("top_p", TOP_P)),
+        "top_k": int(d.get("top_k", TOP_K)),
+        "pen_freq": float(d.get("pen_freq", PEN_FREQ)),
+        "pen_pres": float(d.get("pen_pres", PEN_PRES)),
+        "pen_rep": float(d.get("pen_rep", PEN_REP)),
+        "min_p": float(d.get("min_p", MIN_P)),
+    }
+
+# ---- token loop with your stop/force rules ----------------------------------
+def gen_until_stop(
+    llm: Llama, *,
+    max_chars=MAX_CHARS,
+    temp=TEMP,
+    top_p=TOP_P,
+    top_k=TOP_K,
+    pen_freq=PEN_FREQ,
+    pen_pres=PEN_PRES,
+    pen_rep=PEN_REP,
+    min_p=MIN_P,
+) -> str:
+    text = ""
+    while True:
+        tok_id = llm.sample(
+            temp=temp,
+            top_p=top_p,
+            top_k=top_k,
+            min_p=min_p,                  # NEW
+            frequency_penalty=pen_freq,
+            presence_penalty=pen_pres,
+            repeat_penalty=pen_rep,
+        )
+        if tok_id == 0:
+            break
+
+        piece = llm.detokenize([tok_id]).decode("utf-8", errors="ignore")
+        text += piece
+
+        if len(text) > max_chars:
+            break
+        if mark2 in text:
+            break
+
+        j = text.rfind(mark3)
+        if j != -1:
+            llm.eval([tok_id])
+            after  = text[j + len(mark3):]
+            target = FORCE_AFTER3
+            m = 0
+            while m < len(after) and m < len(target) and after[m] == target[m]:
+                m += 1
+            missing = target[m:]
+            if missing:
+                text += missing
+                toks = llm.tokenize(missing.encode("utf-8"), add_bos=False)
+                if toks:
+                    llm.eval(toks)
+            break
+
+        i = text.rfind(mark1)
+        if i != -1:
+            llm.eval([tok_id])
+            after  = text[i + len(mark1):]
+            target = FORCE_AFTER
+            m = 0
+            while m < len(after) and m < len(target) and after[m] == target[m]:
+                m += 1
+            missing = target[m:]
+            if missing:
+                text += missing
+                toks = llm.tokenize(missing.encode("utf-8"), add_bos=False)
+                if toks:
+                    llm.eval(toks)
+            break
+
+        llm.eval([tok_id])
+
+    return text
+
+def turn(llm: Llama,
+         user_text: str,
+         state_obj, *,
+         max_chars=MAX_CHARS,
+         temp=TEMP,
+         top_k=TOP_K,
+         top_p=TOP_P,
+         pen_freq=PEN_FREQ,
+         pen_pres=PEN_PRES,
+         pen_rep=PEN_REP,
+         min_p=MIN_P):
+    if state_obj is not None:
+        apply_state_min(llm, state_obj)
+
+    toks = llm.tokenize(user_text.encode("utf-8"), add_bos=False)
+    llm.eval(toks)
+
+    reply = gen_until_stop(
+        llm,
+        max_chars=max_chars,
+        temp=temp,
+        top_p=top_p,
+        top_k=top_k,
+        pen_freq=pen_freq,
+        pen_pres=pen_pres,
+        pen_rep=pen_rep,
+        min_p=min_p,
+    )
+    new_state = capture_state_min(llm)
+    return reply, new_state
+
+def make_help_text(*, temp, top_p, top_k, pen_freq, pen_pres, pen_rep, min_p):
+    return f"""\
+# MAMBA TCP Runner — Commands & Tuning Guide
+_Falcon-Mamba-Instruct-7B, GGUF_
+
+## Usage
+- Type plain text to generate a reply.
+- Slash-prefixed commands configure generation parameters.
+
+## Commands
+- `/save [file]` — Save KV state (default: kv.pkl)
+- `/load [file]` — Load KV state (default: kv.pkl)
+- `/save_set [file]` — Save current tuning knobs (default: set.json)
+- `/load_set [file]` — Load tuning knobs (default: set.json)
+
+- `/t [float]` — Set or print temperature. Controls randomness.
+- `/p [float]` — Set or print top_p. Nucleus sampling cutoff.
+- `/k [int]` — Set or print top_k. Hard cap on candidate tokens.
+- `/min_p [float]` — Set or print min_p. Filters tiny tail probabilities.
+
+- `/pen_freq [float]` — Frequency penalty. Reduces repeat *token counts*. 
+	0.0 to disable.
+- `/pen_pres [float]` — Presence penalty. Discourages *seen tokens at all*.
+	0.0 to disable.
+- `/pen_rep  [float]` — Repeat penalty. Multiplies logits of repeats.
+	1.0 to disable.
+
+- `/?` — Show this help plus current settings.
+
+---
+
+## Tuning Advice
+- **Temperature (0–2):** Higher = more random. 0.7–1.0 typical; 0.2 for code.
+- **Top_p (0–1):** Keeps top tokens with cumulative prob ≤ p. 0.9–0.95 typical.
+- **Top_k (1–200):** Hard cap on candidates. 40–80 reasonable; higher = freer.
+- **Min_p (0–1):** Drops extremely unlikely tokens. 0.05–0.10 filters junk tails.
+
+- **Repeat_penalty (>1):** 1.05–1.15 discourages repetition.
+- **Freq/pres penalties (0–1):** Small values (<0.5) encourage novelty without
+  hurting coherence; often left at 0 for code.
+
+---
+
+## Current Settings
+```
+temp       = {temp:.3f}
+top_p      = {top_p:.3f}
+top_k      = {top_k:d}
+min_p      = {min_p:.3f}
+pen_freq   = {pen_freq:.3f}
+pen_pres   = {pen_pres:.3f}
+pen_rep    = {pen_rep:.3f}
+```
+"""
+
+
+def main():
+    HOST = "127.0.0.1"
+    PORT = 6502
+    NULL = b"\x00"
+    CHUNK = 4096
+
+    def recv_until_null(conn):
+        buf = bytearray()
+        while True:
+            data = conn.recv(CHUNK)
+            if not data:
+                return None  # client closed
+            i = data.find(NULL)
+            if i != -1:
+                buf.extend(data[:i])
+                r = bytes(buf)
+                if r and r[-1] == 0:
+                    r = r[:-1]
+                return r
+            buf.extend(data)
+
+    if not os.path.exists(MODEL):
+        raise FileNotFoundError(MODEL)
+
+    llm = make_llm()
+    state_obj = None
+    default_path = "kv.pkl"
+    default_set_path = "set.json"
+    temp = TEMP; top_p = TOP_P; top_k = TOP_K
+    pen_freq = PEN_FREQ; pen_pres = PEN_PRES; pen_rep = PEN_REP
+    min_p = MIN_P
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind((HOST, PORT))
+        srv.listen(1)
+        print(f"[MAMBA TCP] listening on {HOST}:{PORT} (single-connection mode)")
+
+        while True:
+            conn, addr = srv.accept()
+            try:
+                raw = recv_until_null(conn)
+                if raw is None:
+                    conn.sendall(NULL)
+                    continue
+
+                line = raw.decode("utf-8", errors="ignore").strip()
+                pending_post_save = None
+
+                def _maybe_post_save():
+                    nonlocal pending_post_save, state_obj
+                    if pending_post_save:
+                        try:
+                            if state_obj is None:
+                                state_obj = capture_state_min(llm)
+                            save_state_min(state_obj, pending_post_save)
+                        except Exception:
+                            pass
+                        pending_post_save = None
+
+                # Leading "!" header handling (load / load_set / post-save)
+                if line.startswith("!"):
+                    header, _, body = line.partition("\n")
+                    args = header[1:].strip().split()
+                    if len(args) >= 1:
+                        try:
+                            state_obj = load_state_min(llm, args[0])
+                        except Exception:
+                            pass
+                    if len(args) >= 2:
+                        try:
+                            cfg = load_knob_set(args[1])
+                            temp = cfg["temp"]; top_p = cfg["top_p"]; top_k = cfg["top_k"]
+                            pen_freq = cfg["pen_freq"]; pen_pres = cfg["pen_pres"]; pen_rep = cfg["pen_rep"]
+                            min_p = cfg["min_p"]
+                        except Exception:
+                            pass
+                    if len(args) >= 3:
+                        pending_post_save = args[2]
+                    line = body
+
+                parts = line.split(maxsplit=1)
+                head = parts[0].lower() if parts else ""
+                arg = parts[1].strip() if len(parts) > 1 else ""
+
+                # --- commands (identical to RWKV runner + min_p) ---
+                if head == "/save":
+                    path = arg or default_path
+                    try:
+                        if state_obj is None:
+                            state_obj = capture_state_min(llm)
+                        n = save_state_min(state_obj, path)
+                        out = f"[saved -> {path} ({n} bytes)]\n"
+                    except Exception as e:
+                        out = f"[save error] {e}\n"
+                    conn.sendall(out.encode("utf-8", "ignore") + NULL); continue
+
+                if head == "/load":
+                    path = arg or default_path
+                    try:
+                        state_obj = load_state_min(llm, path)
+                        out = f"[loaded <- {path}]\n"
+                    except Exception as e:
+                        out = f"[load error] {e}\n"
+                    conn.sendall(out.encode("utf-8", "ignore") + NULL); continue
+
+                if head == "/save_set":
+                    path = arg or default_set_path
+                    try:
+                        n = save_knob_set(path, temp=temp, top_p=top_p, top_k=top_k,
+                                          pen_freq=pen_freq, pen_pres=pen_pres, pen_rep=pen_rep,
+                                          min_p=min_p)
+                        out = f"[saved set -> {path} ({n} bytes)]\n"
+                    except Exception as e:
+                        out = f"[save_set error] {e}\n"
+                    conn.sendall(out.encode("utf-8", "ignore") + NULL); continue
+
+                if head == "/load_set":
+                    path = arg or default_set_path
+                    try:
+                        cfg = load_knob_set(path)
+                        temp = cfg["temp"]; top_p = cfg["top_p"]; top_k = cfg["top_k"]
+                        pen_freq = cfg["pen_freq"]; pen_pres = cfg["pen_pres"]; pen_rep = cfg["pen_rep"]
+                        min_p = cfg["min_p"]
+                        out = f"[loaded set <- {path}]\n"
+                    except Exception as e:
+                        out = f"[load_set error] {e}\n"
+                    conn.sendall(out.encode("utf-8", "ignore") + NULL); continue
+
+                if head == "/t":
+                    if arg:
+                        try: temp = float(arg)
+                        except Exception: pass
+                        conn.sendall(NULL)
+                    else:
+                        conn.sendall(f"temp = {temp}".encode("utf-8","ignore") + NULL)
+                    continue
+
+                if head == "/k":
+                    if arg:
+                        try: top_k = int(arg)
+                        except Exception: pass
+                        conn.sendall(NULL)
+                    else:
+                        conn.sendall(f"top_k = {top_k}".encode("utf-8","ignore") + NULL)
+                    continue
+
+                if head == "/p":
+                    if arg:
+                        try: top_p = float(arg)
+                        except Exception: pass
+                        conn.sendall(NULL)
+                    else:
+                        conn.sendall(f"top_p = {top_p}".encode("utf-8","ignore") + NULL)
+                    continue
+
+                if head == "/min_p":
+                    if arg:
+                        try: min_p = float(arg)
+                        except Exception: pass
+                        conn.sendall(NULL)
+                    else:
+                        conn.sendall(f"min_p = {min_p}".encode("utf-8","ignore") + NULL)
+                    continue
+
+                if head == "/pen_freq":
+                    if arg:
+                        try: pen_freq = float(arg)
+                        except Exception: pass
+                        conn.sendall(NULL)
+                    else:
+                        conn.sendall(f"pen_freq = {pen_freq}".encode("utf-8","ignore") + NULL)
+                    continue
+
+                if head == "/pen_pres":
+                    if arg:
+                        try: pen_pres = float(arg)
+                        except Exception: pass
+                        conn.sendall(NULL)
+                    else:
+                        conn.sendall(f"pen_pres = {pen_pres}".encode("utf-8","ignore") + NULL)
+                    continue
+
+                if head == "/pen_rep":
+                    if arg:
+                        try: pen_rep = float(arg)
+                        except Exception: pass
+                        conn.sendall(NULL)
+                    else:
+                        conn.sendall(f"pen_rep = {pen_rep}".encode("utf-8","ignore") + NULL)
+                    continue
+
+                if head == "/?":
+                    out = make_help_text(temp=temp, top_p=top_p, top_k=top_k,
+                                         pen_freq=pen_freq, pen_pres=pen_pres, pen_rep=pen_rep,
+                                         min_p=min_p)
+                    conn.sendall(out.encode("utf-8","ignore") + NULL)
+                    continue
+
+                if head.startswith("/"):
+                    conn.sendall(NULL)
+                    continue
+
+                # --- normal prompt ---
+                try:
+                    reply, state_obj = turn(
+                        llm, line, state_obj,
+                        max_chars=MAX_CHARS,
+                        temp=temp, top_p=top_p, top_k=top_k,
+                        pen_freq=pen_freq, pen_pres=pen_pres, pen_rep=pen_rep,
+                        min_p=min_p,
+                    )
+                    _maybe_post_save()
+                except Exception as e:
+                    reply = f"[error] {e}"
+
+                conn.sendall(reply.encode("utf-8", "ignore") + NULL)
+
+            finally:
+                conn.close()
+
+if __name__ == "__main__":
+    main()
+
+~~~(end)~~~
+
+(Turn 3) [FILE]: #!/usr/bin/env python3
+# tools.py — GET / PUT / RUN / QUOTE tools for transcript-driven SSM system
+# Fixes:
+# - Strict turn parsing: content starts one space after ": " in the header
+# - Fence must be EXACTLY "\n\n~~~(end)~~~\n\n" (blank line before and after)
+# - Uses the LAST strict fence before the next header (avoids false positives)
+# - Does NOT include the fence nor the blank line before it in content
+# - Headers must be at start-of-line; won’t match inside code blocks
+
+import sys, os, re, socket, subprocess, tempfile
+from pathlib import Path
+from typing import Optional, List, Tuple
+
+HOST = "127.0.0.1"
+PORT = 6502
+NULL = b"\x00"
+
+TRANSCRIPT = Path(".transcript.txt")
+COUNTER    = Path(".counter")
+
+VERBOSE = False  # set by -v/--verbose
+
+# ---------- Strict turn parsing (blank-line-delimited fence) ----------
+FENCE = "\n\n~~~(end)~~~\n\n"
+# Header must begin at start-of-line; content begins exactly after ": " (one space)
+HEAD_RE = re.compile(r"(?m)^\(Turn\s+(\d+)\)\s*\[([^\]]+)\]:\s*", re.UNICODE)
+
+def _silent_exit():
+    try: sys.exit(0)
+    except SystemExit: raise
+
+def _read_text(p: Path) -> str:
+    try: return p.read_text(encoding="utf-8", errors="ignore")
+    except Exception: return ""
+
+def _append_text(p: Path, s: str):
+    try:
+        with p.open("a", encoding="utf-8") as f: f.write(s)
+    except Exception:
+        _silent_exit()
+
+def _recv_until_null(sock, chunk=4096) -> bytes:
+    buf = bytearray()
+    while True:
+        part = sock.recv(chunk)
+        if not part: return b""
+        i = part.find(NULL)
+        if i != -1:
+            buf.extend(part[:i])
+            return bytes(buf)
+        buf.extend(part)
+
+def _echo_roundtrip(text: str, connect_timeout=3.0, recv_timeout=None) -> str:
+    try:
+        payload = text.encode("utf-8") + NULL
+        with socket.create_connection((HOST, PORT), timeout=connect_timeout) as s:
+            s.settimeout(recv_timeout)
+            s.sendall(payload)
+            reply = _recv_until_null(s)
+            if reply and reply[-1] == 0:
+                reply = reply[:-1]
+        return reply.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+def _iter_headers(txt: str):
+    """Yield (match, turn_no:int, role:str) in document order for true headers."""
+    for m in HEAD_RE.finditer(txt):
+        try:
+            n = int(m.group(1)); role = m.group(2)
+        except Exception:
+            continue
+        yield (m, n, role)
+
+def _parse_turns(txt: str):
+    """
+    Return list of (turn_no:int, role:str, content:str) where content is the
+    exact substring between the header (one char past ': ') and the **last**
+    strict fence '\\n\\n~~~(end)~~~\\n\\n' that occurs before the next header (or EOF).
+    - The fence itself and the blank line before it are NOT included in content.
+    - This avoids truncating content that merely *contains* '~~~(end)~~~' text.
+    - Only matches headers at start-of-line.
+    """
+    out: List[Tuple[int,str,str]] = []
+    headers = list(_iter_headers(txt))
+    if not headers:
+        return out
+
+    for i, (hm, n, role) in enumerate(headers):
+        start = hm.end()  # content starts exactly one space after the colon
+        span_end = headers[i + 1][0].start() if i + 1 < len(headers) else len(txt)
+
+        # Find the **last** strict fence inside this turn's span
+        fence_pos = txt.rfind(FENCE, start, span_end)
+        if fence_pos == -1:
+            # No strict fence: malformed or still generating; skip to avoid bleed-through
+            continue
+
+        content = txt[start:fence_pos]
+        # Do NOT strip trailing newline here; we only exclude the required blank line via FENCE
+        out.append((n, role, content))
+    return out
+
+def _highest_turn(txt: str) -> int:
+    hi = -1
+    for _, n, _ in _iter_headers(txt):
+        if n > hi: hi = n
+    return hi
+
+# ---------------- core helpers ----------------
+def _ensure_counter():
+    if not COUNTER.exists():
+        try:
+            hi = max(0, _highest_turn(_read_text(TRANSCRIPT)))
+            COUNTER.write_text(str(hi), encoding="utf-8")
+        except Exception:
+            try: COUNTER.write_text("0", encoding="utf-8")
+            except Exception: _silent_exit()
+
+def _read_counter() -> int:
+    _ensure_counter()
+    try:
+        s = COUNTER.read_text(encoding="utf-8").strip()
+        return int(s or "0")
+    except Exception:
+        try:
+            hi = max(0, _highest_turn(_read_text(TRANSCRIPT)))
+            COUNTER.write_text(str(hi), encoding="utf-8")
+            s = COUNTER.read_text(encoding="utf-8").strip()
+            return int(s or "0")
+        except Exception:
+            return 0
+
+def _next_turn() -> int:
+    n = max(_highest_turn(_read_text(TRANSCRIPT)), _read_counter()) + 1
+    try: COUNTER.write_text(str(n), encoding="utf-8")
+    except Exception: _silent_exit()
+    return n
+
+def _find_last_role(turns, roles: List[str]) -> Optional[Tuple[int,str,str]]:
+    best = None
+    for n, role, content in turns:
+        if role in roles and (best is None or n > best[0]):
+            best = (n, role, content)
+    return best
+
+def _find_turn_by_id(turns, n: int) -> Optional[Tuple[int,str,str]]:
+    for tid, role, content in turns:
+        if tid == n: return (tid, role, content)
+    return None
+
+def _quote_block(tid: int, role: str, body: str) -> str:
+    lines = body.splitlines()
+    return "\n".join([f"> (Turn {tid}) [{role}]:"] + ["> " + ln for ln in lines])
+
+# ----------------- GET (GET_FILE) -----------------
+def cmd_GET(argv: List[str]):
+    if len(argv) not in (1, 2): _silent_exit()
+    txt = _read_text(TRANSCRIPT)
+    if not txt: _silent_exit()
+    turns = _parse_turns(txt)
+    if not turns: _silent_exit()
+
+    if len(argv) == 1:
+        out_path = Path(argv[0])
+        chosen = _find_last_role(turns, ["FILE"])
+    else:
+        try: n = int(argv[0])
+        except Exception: _silent_exit()
+        out_path = Path(argv[1])
+        t = _find_turn_by_id(turns, n)
+        chosen = t if (t and t[1] == "FILE") else None
+
+    if not chosen: _silent_exit()
+    _, _, content = chosen
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(content, encoding="utf-8")
+    except Exception:
+        _silent_exit()
+
+# ----------------- PUT (PUT_FILE) -----------------
+def cmd_PUT(argv: List[str]):
+    if len(argv) != 1: _silent_exit()
+    path = Path(argv[0])
+    try: content = path.read_text(encoding="utf-8")
+    except Exception: _silent_exit()
+
+    n = _next_turn()
+    if not content.endswith("\n"):
+        content += "\n"
+    # IN-half divider (no OUT header). Runner will force to full fence.
+    body = f"(Turn {n}) [FILE]: " + content + "\n~~~("
+    reply = _echo_roundtrip(body)
+
+    if VERBOSE:
+        try:
+            sys.stdout.write(reply); sys.stdout.flush()
+        except Exception: pass
+
+    _append_text(TRANSCRIPT, body)
+    _append_text(TRANSCRIPT, reply)
+
+# ----------------- RUN -----------------
+def cmd_RUN(argv: List[str]):
+    if len(argv) not in (0, 1): _silent_exit()
+    n_req = None
+    if len(argv) == 1:
+        try: n_req = int(argv[0])
+        except Exception: _silent_exit()
+
+    txt = _read_text(TRANSCRIPT)
+    if not txt: _silent_exit()
+    turns = _parse_turns(txt)
+    if not turns: _silent_exit()
+
+    if n_req is None:
+        chosen = _find_last_role(turns, ["PYTHON", "BASH"])
+    else:
+        t = _find_turn_by_id(turns, n_req)
+        chosen = t if (t and t[1] in ("PYTHON", "BASH")) else None
+
+    if not chosen: _silent_exit()
+    tid, role, content = chosen
+
+    env = os.environ.copy()
+    out = ""
+    try:
+        if role == "BASH":
+            with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", suffix=".sh") as tf:
+                tf.write(content); tf.flush(); sh = tf.name
+            try:
+                p = subprocess.Popen(
+                    ["/bin/bash", sh],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", cwd=os.getcwd(), env=env
+                )
+                out, _ = p.communicate()
+                out = out or ""
+            finally:
+                try: os.unlink(sh)
+                except Exception: pass
+
+        elif role == "PYTHON":
+            with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8", suffix=".py") as tf:
+                tf.write(content); tf.flush(); py = tf.name
+            try:
+                p = subprocess.Popen(
+                    [sys.executable, "-u", py],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", cwd=os.getcwd(), env=env
+                )
+                out, _ = p.communicate()
+                out = out or ""
+            finally:
+                try: os.unlink(py)
+                except Exception: pass
+        else:
+            _silent_exit(); return
+    except Exception:
+        _silent_exit(); return
+
+    n = _next_turn()
+    if not out.endswith("\n"):
+        out += "\n"
+    body = f"(Turn {n}) [OUTPUT]: " + out + "\n~~~("
+    reply = _echo_roundtrip(body)
+
+    if VERBOSE:
+        try:
+            sys.stdout.write(reply); sys.stdout.flush()
+        except Exception: pass
+
+    _append_text(TRANSCRIPT, body)
+    _append_text(TRANSCRIPT, reply)
+
+# ---------------- QUOTE ----------------
+def cmd_QUOTE(argv: List[str]):
+    if len(argv) != 1: _silent_exit()
+    try: qn = int(argv[0])
+    except Exception: _silent_exit()
+
+    txt = _read_text(TRANSCRIPT)
+    if not txt: _silent_exit()
+    turns = _parse_turns(txt)
+    if not turns: _silent_exit()
+    t = _find_turn_by_id(turns, qn)
+    if not t: _silent_exit()
+
+    tid, role, content = t
+    quoted = _quote_block(tid, role, content)
+
+    n = _next_turn()
+    body = f"(Turn {n}) [QUOTE]: " + quoted + "\n\n~~~("
+    reply = _echo_roundtrip(body)
+
+    if VERBOSE:
+        try:
+            sys.stdout.write(reply); sys.stdout.flush()
+        except Exception: pass
+
+    _append_text(TRANSCRIPT, body)
+    _append_text(TRANSCRIPT, reply)
+
+# ----------------- Main -----------------
+def main():
+    global VERBOSE
+    argv = sys.argv[1:]
+    if not argv: _silent_exit()
+
+    # detect -v/--verbose anywhere
+    args = []
+    for a in argv:
+        if a in ("-v", "--verbose"):
+            VERBOSE = True
+        else:
+            args.append(a)
+    if not args: _silent_exit()
+
+    cmd, rest = args[0].upper(), args[1:]
+
+    if cmd == "GET":   cmd_GET(rest)
+    elif cmd == "PUT": cmd_PUT(rest)
+    elif cmd == "RUN": cmd_RUN(rest)
+    elif cmd == "QUOTE": cmd_QUOTE(rest)
+    else: _silent_exit()
+
+if __name__ == "__main__":
+    main()
+    
+
+~~~(end)~~~
+
+(Turn 4) [FILE]: #!/usr/bin/env bash
+# /_/bin/FALCON_INSTRUCT
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+# Ensure PATH for any child processes
+[[ -d "/_/bin" ]] && export PATH="/_/bin:${PATH:-}"
+
+TARGET="/_/src/Falcon_Mamba_Instruct.py"
+WORKDIR="/_/.checkpoints/Falcon3-Mamba-7B-Instruct-q8_0_20250830"
+mkdir -p "$WORKDIR"
+
+# Python: prefer active venv, else system
+if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python3" ]]; then
+  PY="$VIRTUAL_ENV/bin/python3"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+  PY="$VIRTUAL_ENV/bin/python"
+else
+  PY="$(command -v python3)"
+fi
+
+# env -C if available; else subshell cd
+if env -C / tmp true >/dev/null 2>&1; then
+  exec env -C "$WORKDIR" "$PY" "$TARGET" "$@"
+else
+  ( cd "$WORKDIR" && exec "$PY" "$TARGET" "$@" )
+fi
+
+~~~(end)~~~
+
+(Turn 5) [FILE]: #!/usr/bin/env bash
+# /_/bin/RUN
+set -euo pipefail
+
+[[ -d "/_" ]] && cd "/_"
+[[ -d "/_/bin" ]] && export PATH="/_/bin:${PATH:-}"
+
+TOOLS_PY="/_/src/tools.py"
+
+if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+  PY="$VIRTUAL_ENV/bin/python"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python3" ]]; then
+  PY="$VIRTUAL_ENV/bin/python3"
+else
+  PY="$(command -v python3)"
+fi
+
+exec "$PY" "$TOOLS_PY" RUN "$@"
+
+~~~(end)~~~
+
+(Turn 6) [FILE]: #!/usr/bin/env bash
+# /_/bin/QUOTE
+set -euo pipefail
+
+[[ -d "/_" ]] && cd "/_"
+[[ -d "/_/bin" ]] && export PATH="/_/bin:${PATH:-}"
+
+TOOLS_PY="/_/src/tools.py"
+
+if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+  PY="$VIRTUAL_ENV/bin/python"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python3" ]]; then
+  PY="$VIRTUAL_ENV/bin/python3"
+else
+  PY="$(command -v python3)"
+fi
+
+exec "$PY" "$TOOLS_PY" QUOTE "$@"
+
+~~~(end)~~~
+
+(Turn 7) [FILE]: #!/usr/bin/env bash
+# /_/bin/GET_FILE
+set -euo pipefail
+
+[[ -d "/_" ]] && cd "/_"
+[[ -d "/_/bin" ]] && export PATH="/_/bin:${PATH:-}"
+
+TOOLS_PY="/_/src/tools.py"
+
+if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+  PY="$VIRTUAL_ENV/bin/python"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python3" ]]; then
+  PY="$VIRTUAL_ENV/bin/python3"
+else
+  PY="$(command -v python3)"
+fi
+
+exec "$PY" "$TOOLS_PY" GET "$@"
+
+~~~(end)~~~
+
+(Turn 8) [FILE]: #!/usr/bin/env bash
+# /_/bin/PUT_FILE
+set -euo pipefail
+
+[[ -d "/_" ]] && cd "/_"
+[[ -d "/_/bin" ]] && export PATH="/_/bin:${PATH:-}"
+
+TOOLS_PY="/_/src/tools.py"
+
+if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+  PY="$VIRTUAL_ENV/bin/python"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python3" ]]; then
+  PY="$VIRTUAL_ENV/bin/python3"
+else
+  PY="$(command -v python3)"
+fi
+
+exec "$PY" "$TOOLS_PY" PUT "$@"
+
+~~~(end)~~~
+
+(Turn 9) [FILE]: #!/usr/bin/env bash
+# /_/bin/PIPE
+set -euo pipefail
+
+# Canonical workdir & PATH
+[[ -d "/_" ]] && cd "/_"
+[[ -d "/_/bin" ]] && export PATH="/_/bin:${PATH:-}"
+
+TARGET="/_/src/pipe.py"
+
+# Python: prefer active venv, else system
+if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+  PY="$VIRTUAL_ENV/bin/python"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python3" ]]; then
+  PY="$VIRTUAL_ENV/bin/python3"
+else
+  PY="$(command -v python3)"
+fi
+
+exec "$PY" "$TARGET" "$@"
+
+~~~(end)~~~
+
+(Turn 10) [USER]: Create the project bin and src directories if they don't already exist, and add the bin path to .bashrc if needed.
+
+~~~(end)~~~
+
+(Turn 11) [BASH]: # Create bin and src in working directory
+mkdir -p ./bin ./src
+
+# Get absolute path for bin
+BIN_PATH="$(cd ./bin && pwd)"
+
+# Check if PATH export line is already in ~/.bashrc
+if ! grep -qF "$BIN_PATH" ~/.bashrc; then
+  echo "export PATH=\"\$PATH:$BIN_PATH\"" >> ~/.bashrc
+  echo "Added $BIN_PATH to PATH in ~/.bashrc"
+else
+  echo "$BIN_PATH already in PATH"
+fi
+
+~~~(end)~~~
+
+(Turn 11) [OUTPUT]: Added /_/bin to PATH in ~/.bashrc
+
+~~~(end)~~~
+
+(Turn 12) [USER]: Install the files from the transcript.
+
+~~~(end)~~~ 
+
+(Turn 13) [BASH]: # Local install in /_
+set -Eeuo pipefail
+cd /_
+export PATH="/_/bin:${PATH:-}"
+
+# ensure dirs
+mkdir -p /_/src /_/bin
+
+# write source files from transcript (absolute commands, absolute outputs)
+GET_FILE 1  /_/src/pipe.py
+GET_FILE 2  /_/src/Falcon_Mamba_Instruct.py
+GET_FILE 3  /_/src/tools.py
+GET_FILE 4  /_/bin/FALCON_INSTRUCT
+GET_FILE 6  /_/bin/QUOTE
+GET_FILE 8  /_/bin/PUT_FILE
+GET_FILE 9  /_/bin/PIPE
+GET_FILE 5  /_/bin/RUN
+GET_FILE 7  /_/bin/GET_FILE
+
+# permissions
+chmod +x bin/FALCON_INSTRUCT bin/RUN bin/QUOTE bin/GET_FILE bin/PUT_FILE bin/PIPE
+
+# add /_/bin to PATH if not present
+if ! grep -qF "/_/bin" ~/.bashrc; then
+  echo 'export PATH="$PATH:/_/bin"' >> ~/.bashrc
+fi
+
+echo "[installed] pipe/tools + launchers ready"
+
+~~~(
