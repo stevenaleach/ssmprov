@@ -1,81 +1,100 @@
 # ssmprov
-"SSM Improv".
+**"SSM Improv"** – small framework for working with **checkpointed State-Space Model (SSM)** contexts as Unix filters.
 
-This is meant to serve two purposes, first just to demonstrate saving and resuming of checkpoints with a state space model.
+- *Always-on* model runner serving any SSM model with save/load checkpoints.  
+- **Named contexts** become static or dynamic CLI filters via simple Bash wrappers.  
+- Entire system bootstraps from a single transcript containing source + instructions.  
 
-Secondly, to experiment with prompting using a set of output roles in a play-like turn based transcript - with the hope of building and forking possibly useful working specialist contexts for SSMs.
+---
 
-# Components:
+## Components
 
-* RWKV7 Runner - RWKV7.py
+- **Model Runner** – TCP service for an SSM model (e.g., Falcon-Mamba, RWKV, XLSTM).  
+- **PIPE** – send prompts or slash-commands to runner; supports named checkpoints via bang-lines.  
+- **tools.py** – provides subcommands:  
+  - `GET_FILE` – extract FILE turns from transcript  
+  - `PUT_FILE` – add external files into transcript  
+  - `RUN` – execute PYTHON/BASH turns, capture OUTPUT  
+  - `QUOTE` – quote any transcript turn  
+- **Bash Launchers** – wrappers for runner, PIPE, GET_FILE, PUT_FILE, QUOTE, RUN.  
+- **primer.txt** – diegetic transcript defining roles, fences, and containing all source files.  
 
-    TCP service for sampling and checkpointing.  Port 6502, null terminated post, response.
-    Hard coded "\n\n"+"~~~(end)~~~"+"\n\n" turn stops and forced stop completion.
+---
 
-    Model .pth: https://huggingface.co/BlinkDL/rwkv7-g1/blob/main/rwkv7-g0-7.2b-20250722-ctx4096.pth
-    Convert to 8-bit gguf for runner.
+## Quick Start
 
-* Composer GUI - COMPOSER.py
+```bash
+# 1. Prepare working directory
+sudo mkdir /_
+sudo chown $USER:$USER /_
+cd /_
 
-    Half and full-step turn prompting, Markdown+LaTeX rendering and raw transcript.
+# 2. Copy files from repo
+# (repo has bin/ and src/ just like /_)
+cp -r /path/to/repo/bin /_
+cp -r /path/to/repo/src /_
 
-* tools.py
+# 3. Add /_/bin to PATH in ~/.bashrc
+echo 'export PATH="$PATH:/_/bin"' >> ~/.bashrc
+source ~/.bashrc
 
-    Provides GET, PUT, QUOTE, RUN subcommands.
+Ensure you already have llama.cpp built and llama_cpp installed.
+If not using a local llama.cpp build, edit local_build=False in the runner script.
 
-* install.sh
+# 4. Launch model runner (e.g., Falcon-Mamba)
+FALCON_INSTRUCT &
 
-    Bash scripts to ~/bin, added to path if needed.
-    Source to ~/src/ssmprov
-    Creates working directory /_ and initial dot-files/paths within.
 
-* Bash scripts:
+# Optional: keep a blank checkpoint too
+echo "/save blank" | PIPE
 
-    MODEL, COMPOSER - launch rwkv7 runner, composer gui in /_ using current Python environment.
-    GET, PUT, QUOTE, RUN - Similar launchers for tools.py subcommands run within /_ and current environment.
+# 5. Prime model with all source files & transcript
+cat prime_clir.txt | PIPE 
 
-# Composer GUI
+  The model should autocomplete the turn closing and print ")~~~"
 
-The Composer GUI consists of a right-hand pane with a live display of .transcript.txt
-and the left hand provides an interface for priming and single and half stepping
-inference through the active runner.
+# 6. Save primed checkpoint
+echo "/save primed" | PIPE
 
-Interface:
+## PIPE command:
 
-The top input box is for "!" prefix lines.  Any string in this box, if present, will be
-prepended to the templated prompt sent.  "!loadname" presents the prompt to the specified
-named checkpoint, "!loadname settings" presents the prompt to the checkpoint "loadname" with
-the sampling settings "settings".  Finally, "!loadname settings savename" would present the
-prompt to the checkpoint "loadname" with sampling settings "settings" and save the post-generation
-checkpoint to "savename".
+Options:
 
-The main input area at the bottom is for free-form multi-line prompt input (shift+enter to send).
+--in ROLE / --out ROLE — Wrap input/output in transcript headers with roles.
 
-Above this are three drop-downs which may either be blank or allow selection (from left to right)
-of: input role string, divider string, and output role string.
+--bang TEXT — Prepend raw text before the body (e.g.,` --bang  '!checkpoint file headers' `).
 
-The values in these dropdowns are python expressions which evaluate to strings and are found in
-.s1.txt, .s2.txt, and .s3.txt in the working directory (by default /_).
+--debang — Omit the --bang text from the transcript while still sending it.
 
-Additinally, '/' commands (such as /save, /load, etc.) may be sent to the runner as prompts,
-without regard to dropdown settings.
+--port N — TCP port (default 6502).
 
-Usage:
+## Model Runner Commands:
 
-With a cold start, a primer text can be pasted to establish the end-marker usage and turn roles.
-The file .counter should be pre-written at composer launch with the highest turn number in
-the primer text, and the text should end with the start of an end marker, "\n\n~~~(", testing and
-forcing completion on eval.
+Runner Slash Commands
 
-After this, the user may half-step and full-step through prompts depending on the divider and output
-roles selected for input prompts: With the half-marker, the model will read in the input role turn
-and simply finish the end marker to complete it.  With a full divider and specified output role name,
-the model will (hopefully) generate role output and cleanly terminate with a full end marker on
-completion.
+These work via PIPE input starting with /.
+All assume the active runner supports the standard command set.
 
-# Primer:
+Command	Purpose
+/save [file]	Save current model state (default: kv.pkl)
+/load [file]	Load model state
+/save_set [file]	Save tuning knobs (temp, top_p, etc.)
+/load_set [file]	Load tuning knobs
+/t [val]	Set/print temperature
+/p [val]	Set/print top_p
+/k [val]	Set/print top_k
+/min_p [val]	Set/print min_p cutoff
+/pen_freq [val]	Set/print frequency penalty
+/pen_pres [val]	Set/print presence penalty
+/pen_rep [val]	Set/print repeat penalty
+/?	Show help and current settings
 
-primer.txt is the current primer I've been pasting in for cold-start testing. Gives the general idea
-with the script/transcript form I've been playing with -- only the \n\n~~~(end)~~~\n\n stop markers
-are hard-coded in the runner, all else can be rewritten with whatever typography and role names you'd
-like to try.
+## Bang Lines:
+Bang lines are literal lines that PIPE prepends to the "prompt" sent, format is "!load_checkpoint sampling_settings !save_checkpoint".
+These should be entered in single quotes at the shell (PIPE --bang '!load set save').
+Only the first parameter is required, current sampling settings will be used if not provided and no post-prompt save will be made if not provided.
+"!live settings live" would result in a live session which updates the checkpoint after each prompt.
+
+## NAME:
+
+The script NAME in src, though not yet tested, can (hopefully) be copied into /_/bin or elsewhere in the executable path given the same filename as any save in the model's checkpoint directory.  It takes care of the --bang line by specifying it's own name as the save and load checkpoint and (hard-coded, edit to change) "coder" (which means you must first save a "coder" sampling settings file) sampling.  That then *should* become a named filter that can be piped through in the shell, with input and output role names and whatever specialist behavior that context is doing. This script can be edited, removing the second usage of $name in it, to produce static snapshots.
