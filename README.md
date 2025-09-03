@@ -78,6 +78,18 @@ echo "Hello, Computer" | PIPE --in USER --out INTERFACE
 - `--debang` — Omit the --bang text from the transcript while still sending it.
 - `--port N` — TCP port (default 6502).
 
+**note**: With no --out role specified, a half end-mark ("\n\n~~~(" ) rather than the full
+turn stop mark ("\n\n~~~(end)~~~\n\n") is sent - causing the model and runner to
+auto-complete.  This allows for "half-stepping" of input, simply reading in a set of role
+turns.  Generation is prompted by specifying an out role which is opened by templating
+and the model completes.
+
+All role names are templated as "[name]: ", Including the single space after the colon.
+This leaves the model to imediately begin output.  "[name]:\n" was initially tested, but
+oddly leads both RWKV and Falcon models to often hallucinate a new, different, role name
+instead of beginning output generation while the space remains stable with the models
+tested.
+
 ### Example
 
 ```bash
