@@ -90,11 +90,19 @@ Command	Purpose
 /?	Show help and current settings
 
 ## Bang Lines:
-Bang lines are literal lines that PIPE prepends to the "prompt" sent, format is "!load_checkpoint sampling_settings !save_checkpoint".
+Bang lines are literal lines that PIPE prepends to the "prompt" sent,
+format is "!load_checkpoint sampling_settings !save_checkpoint".
 These should be entered in single quotes at the shell (PIPE --bang '!load set save').
-Only the first parameter is required, current sampling settings will be used if not provided and no post-prompt save will be made if not provided.
+Only the first parameter is required, current sampling settings will be used if not provided
+and no post-prompt save will be made if not provided.
 "!live settings live" would result in a live session which updates the checkpoint after each prompt.
 
 ## NAME:
 
-The script NAME in src, though not yet tested, can (hopefully) be copied into /_/bin or elsewhere in the executable path given the same filename as any save in the model's checkpoint directory.  It takes care of the --bang line by specifying it's own name as the save and load checkpoint and (hard-coded, edit to change) "coder" (which means you must first save a "coder" sampling settings file) sampling.  That then *should* become a named filter that can be piped through in the shell, with input and output role names and whatever specialist behavior that context is doing. This script can be edited, removing the second usage of $name in it, to produce static snapshots.
+The script NAME in src, though not yet tested, can (hopefully) be copied into /_/bin or elsewhere in
+the executable path given the same filename as any save in the model's checkpoint directory.  It takes
+care of the --bang line by specifying it's own name as the save and load checkpoint and (hard-coded,
+edit to change) "coder" (which means you must first save a "coder" sampling settings file) sampling.
+That then *should* become a named filter that can be piped through in the shell, with input and output
+role names and whatever specialist behavior that context is doing. This script can be edited, removing
+the second usage of $name in it, to produce static snapshots.
