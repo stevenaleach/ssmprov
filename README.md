@@ -143,7 +143,13 @@ The `NAME` script can be copied into `/bin` or elsewhere on PATH with the **same
 It automatically sets `--bang '!NAME settings NAME'`, so:  
 
 ```bash
-echo "Hello" | NAME
+echo "Hello" | NAME --in USER --out INTERFACE
+
+Assuming a checkpoint "Alice":
+
+cp /_/src/NAME /_/bin Alice
+echo "Hello, Alice." | Alice --in USER --out INTERFACE
+
 ```
 
 - Loads checkpoint `NAME`
