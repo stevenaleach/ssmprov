@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# /_/bin/PIPE
+set -euo pipefail
+
+# Canonical workdir & PATH
+[[ -d "/_" ]] && cd "/_"
+[[ -d "/_/bin" ]] && export PATH="/_/bin:${PATH:-}"
+
+TARGET="/_/src/pipe.py"
+
+# Python: prefer active venv, else system
+if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+  PY="$VIRTUAL_ENV/bin/python"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python3" ]]; then
+  PY="$VIRTUAL_ENV/bin/python3"
+else
+  PY="$(command -v python3)"
+fi
+
+exec "$PY" "$TARGET" "$@"

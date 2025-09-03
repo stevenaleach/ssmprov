@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# /_/bin/RUN
+set -euo pipefail
+
+[[ -d "/_" ]] && cd "/_"
+[[ -d "/_/bin" ]] && export PATH="/_/bin:${PATH:-}"
+
+TOOLS_PY="/_/src/tools.py"
+
+if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+  PY="$VIRTUAL_ENV/bin/python"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python3" ]]; then
+  PY="$VIRTUAL_ENV/bin/python3"
+else
+  PY="$(command -v python3)"
+fi
+
+exec "$PY" "$TOOLS_PY" RUN "$@"
