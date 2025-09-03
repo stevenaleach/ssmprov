@@ -145,10 +145,10 @@ It automatically sets `--bang '!NAME settings NAME'`, so:
 ```bash
 echo "Hello" | NAME --in USER --out INTERFACE
 
-Assuming a checkpoint "Alice":
+Assuming a checkpoint "Alice", primed to speak in the ALICE role:
 
 cp /_/src/NAME /_/bin Alice
-echo "Hello, Alice." | Alice --in USER --out INTERFACE
+echo "Hello, Alice." | Alice --in USER --out ALICE
 
 ```
 
