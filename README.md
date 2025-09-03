@@ -145,17 +145,22 @@ It automatically sets `--bang '!NAME settings NAME'`, so:
 ```bash
 echo "Hello" | NAME --in USER --out INTERFACE
 
-Assuming a checkpoint "Alice", primed to speak in the ALICE role:
-
-cp /_/src/NAME /_/bin Alice
-echo "Hello, Alice." | Alice --in USER --out ALICE
-
 ```
 
 - Loads checkpoint `NAME`
 - Uses sampling settings `settings`
 - Saves back to `NAME` after each call
 
+Assuming a checkpoint "Alice", primed to speak in the ALICE role:
+
+```bash
+cp /_/src/NAME /_/bin Alice
+echo "Hello, Alice." | Alice --in USER --out ALICE
+
+```
+
+
 To make static snapshots (load only, no save), remove the final `name` in the script.
+Change sampling settings name by editing as well.
 
 ---
