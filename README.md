@@ -49,7 +49,7 @@ FALCON_INSTRUCT &
 echo "/save blank" | PIPE
 
 # 5. Prime model with all source files & transcript
-cat prime_clir.txt | PIPE 
+cat prime_cli.txt | PIPE 
 
   The model should autocomplete the turn closing and print ")~~~"
 
