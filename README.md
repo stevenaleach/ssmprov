@@ -55,7 +55,7 @@ cat primer_cli.txt | PIPE --counter 12
 # 7.5 Try the RUN command now, and the last BASH block in the new .transcript.txt
 will be run which will re-install all the /_/bin and /_/src files from the transcript.
 (which should be the same as those already there), and satisfy the model later since
-a proper OUTPUT block will also now have been added to the context reasurring it that
+a proper OUTPUT block will also now have been added to the context reassuring it that
 the code was run.
 
 # 8. Save primed checkpoint
@@ -64,7 +64,7 @@ echo "/save primed" | PIPE
 # 9. Prompting:
 echo "Hello, Computer" | PIPE --in USER --out INTERFACE
   ** Note that with the current primer a few example steps without an output role
-     to establish how INTEFACE should speak will actually be needed before this will
+     to establish how INTERFACE should speak will actually be needed before this will
      respond gracefully.
 
 ```
@@ -85,7 +85,7 @@ turns.  Generation is prompted by specifying an out role which is opened by temp
 and the model completes.
 
 All role names are templated as "[name]: ", Including the single space after the colon.
-This leaves the model to imediately begin output.  "[name]:\n" was initially tested, but
+This leaves the model to immediately begin output.  "[name]:\n" was initially tested, but
 oddly leads both RWKV and Falcon models to often hallucinate a new, different, role name
 instead of beginning output generation while the space remains stable with the models
 tested.
