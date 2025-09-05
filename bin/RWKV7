@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# /_/bin/FALCON_INSTRUCT
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+# Ensure PATH for any child processes
+[[ -d "/_/bin" ]] && export PATH="/_/bin:${PATH:-}"
+
+TARGET="/_/src/RWKV7_G0a.py"
+WORKDIR="/_/.checkpoints/rwkv7-g0a-7.2b-20250829-ctx4096-Q8_0.gguf"
+mkdir -p "$WORKDIR"
+
+# Python: prefer active venv, else system
+if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python3" ]]; then
+  PY="$VIRTUAL_ENV/bin/python3"
+elif [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+  PY="$VIRTUAL_ENV/bin/python"
+else
+  PY="$(command -v python3)"
+fi
+
+# env -C if available; else subshell cd
+if env -C / tmp true >/dev/null 2>&1; then
+  exec env -C "$WORKDIR" "$PY" "$TARGET" "$@"
+else
+  ( cd "$WORKDIR" && exec "$PY" "$TARGET" "$@" )
+fi
