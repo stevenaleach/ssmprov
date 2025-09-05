@@ -29,7 +29,7 @@ sudo mkdir /_
 sudo chown $USER:$USER /_
 cd /_
 
-# 2. Copy files from repo (repo has bin/ and src/ just like /_)
+# 2. Copy files from repo
 cp -r /path/to/repo/bin /_
 cp -r /path/to/repo/src /_
 
