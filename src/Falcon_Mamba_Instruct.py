@@ -35,14 +35,14 @@ if local_build:
 from llama_cpp import Llama
 
 # defaults (kept close to your RWKV runner; Mamba tip: min_p ~= 0.05–0.10 often helps)
-MAX_CHARS = 16*1024
+MAX_CHARS = 4*1024
 TEMP      = 0.18
 TOP_P     = 0.88
 TOP_K     = 0
 PEN_FREQ  = 0.00
 PEN_PRES  = 0.00
 PEN_REP   = 1.00
-MIN_P     = 0.12 
+MIN_P     = 0.12
 
 # stop-marker helpers (same behavior as RWKV runner)
 mark1 = "\n~~~("
@@ -255,13 +255,14 @@ _Falcon-Mamba-Instruct-7B, GGUF_
 - `/load [file]` — Load KV state (default: kv.pkl)
 - `/save_set [file]` — Save current tuning knobs (default: set.json)
 - `/load_set [file]` — Load tuning knobs (default: set.json)
+- `/max [n]` — Prints or sets maximum characters for generation.
 
 - `/t [float]` — Set or print temperature. Controls randomness.
 - `/p [float]` — Set or print top_p. Nucleus sampling cutoff.
 - `/k [int]` — Set or print top_k. Hard cap on candidate tokens.
 - `/min_p [float]` — Set or print min_p. Filters tiny tail probabilities.
 
-- `/pen_freq [float]` — Frequency penalty. Reduces repeat *token counts*. 
+- `/pen_freq [float]` — Frequency penalty. Reduces repeat *token counts*.
 	0.0 to disable.
 - `/pen_pres [float]` — Presence penalty. Discourages *seen tokens at all*.
 	0.0 to disable.
@@ -402,6 +403,19 @@ def main():
                     except Exception as e:
                         out = f"[load error] {e}\n"
                     conn.sendall(out.encode("utf-8", "ignore") + NULL); continue
+
+                if head == "/max":
+                    if arg:
+                        try:
+                            global MAX_CHARS
+                            MAX_CHARS = max(1, int(arg))
+                        except Exception:
+                            pass
+                        conn.sendall(NULL)
+                    else:
+                        conn.sendall(f"max = {MAX_CHARS}".encode("utf-8","ignore") + NULL)
+                    continue
+
 
                 if head == "/save_set":
                     path = arg or default_set_path
