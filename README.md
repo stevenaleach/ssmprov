@@ -67,9 +67,6 @@ echo "/save primed" | PIPE
 
 # 9. Prompting:
 echo "Hello, Computer" | PIPE --in USER --out INTERFACE
-  ** Note that with the current primer a few example steps without an output role
-     to establish how INTERFACE should speak will actually be needed before this will
-     respond gracefully.
 
 ```
 
