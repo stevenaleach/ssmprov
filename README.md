@@ -1,5 +1,9 @@
+# State Space Models:
+
+State Space Models tend to be treated much like transformers, ignoring the major opportunity that comes from being able to save and resume context checkpoints.  That means being able to feed priming text, save the model state, and instantly resume that state and continue from it -- or to switch between saved specialist primed contexts instantly with no re-read time required for the priming text.
+
 # ssmprov
-**"SSM Improv"** – small framework for working with **checkpointed State-Space Model (SSM)** contexts as Unix filters.
+**"SSM Improv"** – small framework for working with **checkpointed State-Space Model (SSM)** snapshot contexts as Unix filters.
 
 - *Always-on* model runner serving any SSM model with save/load checkpoints.
 - **Named contexts** become static or dynamic CLI filters via simple Bash wrappers.
