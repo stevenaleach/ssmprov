@@ -116,6 +116,7 @@ Send via `PIPE`, prefixing commands with `/`:
 | /pen_freq [val]  | Set/print frequency penalty           |
 | /pen_pres [val]  | Set/print presence penalty            |
 | /pen_rep [val]   | Set/print repeat penalty              |
+| /max [val]       | Set/print maximum chars               |
 | /?               | Show help and current settings        |
 
 
