@@ -1,6 +1,6 @@
 # State Space Models:
 
-State Space Models tend to be treated much like transformers, ignoring the major opportunity that comes from being able to save and resume context checkpoints.  That means being able to feed priming text, save the model state, and instantly resume that state and continue from it -- or to switch between saved specialist primed contexts instantly with no re-read time required for the priming text.
+State Space Models tend to be treated much like transformers, ignoring the major opportunity that comes from being able to save and resume context checkpoints.  That means being able to feed priming text, save the model state, and instantly resume that state and continue from it -- or to switch between saved specialist primed contexts instantly with no re-read time required for the priming text.  For RWKV G0a, snapshots are 34MB, for Falcon Mamba, 40MB.
 
 # ssmprov
 **"SSM Improv"** – small framework for working with **checkpointed State-Space Model (SSM)** snapshot contexts as Unix filters.
